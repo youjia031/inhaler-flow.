@@ -1,0 +1,1006 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>呼吸太鼓達人 — Breath Taiko</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#141726; --panel:#1e2236; --lane:#262b42; --text:#eef1f8;
+    --dim:#9aa3bd; --don:#e94b3c; --ka:#3d9ae0; --gold:#ffd54f; --edge:#39405f;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0;background:var(--bg);color:var(--text);
+    font-family:"Noto Sans TC","Microsoft JhengHei UI","PingFang TC",system-ui,sans-serif}
+  .wrap{max-width:1100px;margin:0 auto;padding:16px 14px 28px}
+  .panel{background:var(--panel);border-radius:10px;padding:12px 14px;margin-bottom:10px}
+  .row{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+  .row + .row{margin-top:10px}
+  label.f{color:var(--text);font-size:14px;opacity:.85;margin-left:4px}
+  button,select,input[type=text]{
+    font-family:inherit;font-size:14px;padding:8px 13px;border-radius:7px;
+    border:1px solid #39405f;background:#2b3049;color:var(--text);cursor:pointer}
+  input[type=text]{cursor:text;width:110px}
+  select{cursor:pointer}
+  button:hover:not(:disabled){background:#39405f}
+  button:disabled{opacity:.45;cursor:not-allowed}
+  button.accent{background:var(--don);border-color:var(--don);color:#fff;font-weight:700}
+  button.accent:hover:not(:disabled){background:#c93a2c}
+  button:focus-visible,select:focus-visible,input:focus-visible{outline:2px solid var(--gold);outline-offset:2px}
+  .hint{margin-left:auto;color:var(--dim);font-size:13px}
+  canvas{width:100%;max-width:1100px;display:block;border-radius:10px;background:var(--bg);touch-action:none}
+  .status{background:var(--panel);color:var(--dim);font-size:13px;
+    padding:9px 14px;border-radius:8px;margin-top:10px;min-height:37px}
+  .touch{display:flex;gap:10px;margin-top:10px}
+  .touch button{flex:1;padding:20px;font-size:19px;font-weight:700;user-select:none}
+  #btnIn{background:var(--don);border-color:var(--don);color:#fff}
+  #btnOut{background:var(--ka);border-color:var(--ka);color:#fff}
+  .touch button:active{filter:brightness(1.35)}
+  input[type=range]{width:130px;accent-color:var(--don)}
+  .warn{color:var(--gold)}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="panel">
+    <div class="row">
+      <button id="btnConnect" class="accent">連線裝置</button>
+      <span id="portName" style="color:var(--dim);font-size:13px"></span>
+      <label class="f">病歷</label>
+      <input type="text" id="patient" placeholder="編號">
+      <label class="f">判定</label>
+      <select id="assist"><option>嚴格</option><option>輔助</option></select>
+    </div>
+    <div class="row">
+      <button id="btnPlay" class="accent">開始遊戲</button>
+      <button id="btnReset">重來</button>
+      <button id="btnCsv">匯出 CSV</button>
+      <label class="f" style="margin-left:14px">
+        <input type="checkbox" id="musicOn" checked style="vertical-align:middle"> 配樂
+      </label>
+      <input type="range" id="vol" min="0" max="100" value="60">
+      <span id="info" style="color:var(--dim);font-size:13px;margin-left:8px">記錄筆數 0</span>
+      <span class="hint">鍵盤：↑ 吸氣　↓ 吐氣　空白鍵 開始/暫停</span>
+    </div>
+  </div>
+
+  <canvas id="game" width="1100" height="500"></canvas>
+
+  <div class="touch">
+    <button id="btnIn">吸　氣</button>
+    <button id="btnOut">吐　氣</button>
+  </div>
+
+  <div class="status" id="status">準備中…</div>
+</div>
+
+<script>
+"use strict";
+
+/* =====================================================
+   課表 / 譜面來源   (mode, flow_Lpm, duration_sec)
+   長度保持 0.5 秒的倍數，才會落在拍點上
+   ===================================================== */
+const EDUCATION_PROGRAM = [
+  ["inhalation", 0, 3],
+  // 階段一：節奏訓練
+  ["inhalation", 60, 2], ["inhalation", 0, 1], ["inhalation", 0, 2],
+  ["exhalation", 60, 3], ["inhalation", 0, 2],
+  ["inhalation", 60, 2], ["inhalation", 0, 1], ["inhalation", 0, 2],
+  ["exhalation", 60, 3], ["inhalation", 0, 2],
+  // 階段二：力道挑戰
+  ["inhalation", 0, 1], ["inhalation", 0, 1], ["inhalation", 90, 1.5],
+  ["inhalation", 0, 2], ["exhalation", 50, 6], ["inhalation", 0, 1],
+  ["inhalation", 0, 2], ["inhalation", 90, 1.5],
+  ["inhalation", 0, 2], ["exhalation", 50, 6], ["inhalation", 0, 2],
+  // 階段三：高峰衝刺
+  ["inhalation", 0, 2], ["inhalation", 120, 1], ["inhalation", 0, 1],
+  ["inhalation", 0, 2], ["exhalation", 100, 2], ["inhalation", 0, 2],
+  // 緩和收尾
+  ["inhalation", 40, 3], ["inhalation", 0, 2], ["exhalation", 40, 4],
+  ["inhalation", 0, 2], ["inhalation", 30, 3], ["inhalation", 0, 2],
+  ["exhalation", 30, 4], ["inhalation", 0, 3],
+];
+
+/* ============ 遊戲參數 ============ */
+const CANVAS_W = 1100, CANVAS_H = 500;
+const JUDGE_X = 210, LANE_Y = 200, LANE_H = 150;
+const SCROLL_SPEED = 230.0;
+const LEAD_IN = 2.0;
+
+const BPM = 120, BEAT = 0.5, BAR = 2.0;
+
+const ACC_LEAD = 0.15, JUDGE_DELAY = 0.25;
+const RATIO_GREAT = 0.70, RATIO_GOOD = 0.35;
+const TH_NORMAL = 18.0, TH_BIG = 55.0, BIG_FLOW = 90;
+const SC_GREAT = 300, SC_GOOD = 100;
+const GA_GREAT = 3.0, GA_GOOD = 1.2, GA_MISS = -4.0;
+const GAUGE_CLEAR = 80.0;
+
+/* ============ 配色與字級 ============ */
+const C_BG="#141726", C_PANEL="#1e2236", C_LANE="#262b42", C_LANE_HI="#2f3550";
+const C_JUDGE="#4a5273", C_BEAT="#333a58", C_BAR="#465080";
+const C_DON="#e94b3c", C_DON_LT="#ff8a7a", C_KA="#3d9ae0", C_KA_LT="#82c8f5";
+const C_GOLD="#ffd54f", C_TEXT="#eef1f8", C_DIM="#9aa3bd";
+const C_GREAT="#ffd54f", C_GOOD="#8de08d", C_MISS="#6d7590";
+
+const FONT_UI  = '"Noto Sans TC","Microsoft JhengHei UI","PingFang TC",sans-serif';
+const FONT_NUM = '"JetBrains Mono",Consolas,monospace';
+
+const FS_LABEL=17, FS_TICK=15, FS_BIGNUM=36, FS_NOTE=27, FS_NOTE_BG=35;
+const FS_META=19, FS_JUDGE=45, FS_TITLE=48, FS_RESULT=43;
+
+/* ============ ESP32 輸出解析 ============ */
+const FLOW_RE = /Flow\s*=\s*(YES|no)/i;
+const EST_RE  = /Est\s*=\s*([-+]?\d*\.?\d+)/;
+const LOWE_RE = /LowEnergy\s*=\s*([-+]?\d+)/;
+
+function parseFftLine(line){
+  if(!line.includes("[FFT]")) return null;
+  const bands = {};
+  const re = /(\d+)k\s*:\s*([-+]?\d*\.?\d+)/g;
+  let m, any = false;
+  while((m = re.exec(line))){
+    const k = parseInt(m[1], 10);
+    if(k >= 1 && k <= 20){ bands[k] = parseFloat(m[2]); any = true; }
+  }
+  return any ? bands : null;
+}
+
+function parseDetectLine(line){
+  if(!line.includes("[DETECT]")) return null;
+  const mf = FLOW_RE.exec(line);
+  if(!mf) return null;
+  const flowYes = mf[1].toUpperCase() === "YES";
+  const me = EST_RE.exec(line);
+  const est = me ? (parseFloat(me[1]) || 0) : 0;
+  const ml = LOWE_RE.exec(line);
+  const lowE = ml ? (parseInt(ml[1], 10) || 0) : 0;
+  return { flowYes, est, lowE };
+}
+
+function detectBreathMode(fft){
+  if(!fft) return null;
+  const e1 = fft[1] || 0, e2 = fft[2] || 0, e3 = fft[3] || 0;
+  if(e1 + e2 + e3 < 500000) return null;
+  const r = e1 > 0 ? e3 / e1 : 10;
+  return r > 0.8 ? "exhalation" : "inhalation";
+}
+
+/* ============ 譜面 ============ */
+function buildChart(program = EDUCATION_PROGRAM){
+  const notes = [];
+  let t = 0;
+  for(const [mode, flow, dur] of program){
+    if(flow > 0 && dur > 0){
+      notes.push({
+        t, kind: mode === "inhalation" ? "don" : "ka",
+        big: flow >= BIG_FLOW, hold: dur, flow,
+        judged: null, holdHit: 0, peak: 0,
+        get end(){ return this.t + this.hold; },
+      });
+    }
+    t += dur;
+  }
+  return { notes, len: t };
+}
+
+/* =====================================================
+   音樂引擎 — Web Audio 即時合成，不使用任何外部音檔
+   ===================================================== */
+class Music{
+  constructor(){
+    this.ctx = null; this.master = null; this.bus = null;
+    this.noise = null; this.vol = 0.6; this.enabled = true;
+    this.timer = null; this.nextTime = 0; this.step = 0; this.t0 = 0;
+  }
+  ensure(){
+    if(this.ctx) return true;
+    try{
+      const AC = window.AudioContext || window.webkitAudioContext;
+      this.ctx = new AC();
+      this.master = this.ctx.createGain();
+      this.master.gain.value = this.vol;
+      this.master.connect(this.ctx.destination);
+      // 一次性白噪音緩衝
+      const len = this.ctx.sampleRate * 1.0;
+      const buf = this.ctx.createBuffer(1, len, this.ctx.sampleRate);
+      const d = buf.getChannelData(0);
+      for(let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+      this.noise = buf;
+      return true;
+    }catch(e){ this.ctx = null; return false; }
+  }
+  now(){ return this.ctx ? this.ctx.currentTime : performance.now() / 1000; }
+  setVolume(v){ this.vol = v; if(this.master) this.master.gain.value = v; }
+
+  start(){
+    if(!this.ensure()) return;
+    if(this.ctx.state === "suspended") this.ctx.resume();
+    this.stopBus();
+    this.bus = this.ctx.createGain();
+    this.bus.gain.value = 0.85;
+    this.bus.connect(this.master);
+    this.t0 = this.ctx.currentTime + 0.12;
+    this.step = 0;
+    this.nextTime = this.t0;
+    clearInterval(this.timer);
+    this.timer = setInterval(() => this.schedule(), 25);
+  }
+  stopBus(){
+    if(this.bus){ try{ this.bus.disconnect(); }catch(e){} this.bus = null; }
+  }
+  stop(){ clearInterval(this.timer); this.timer = null; this.stopBus(); }
+  pause(){ if(this.ctx && this.ctx.state === "running") this.ctx.suspend(); }
+  resume(){ if(this.ctx && this.ctx.state === "suspended") this.ctx.resume(); }
+
+  schedule(){
+    if(!this.ctx || !this.bus) return;
+    const ahead = this.ctx.currentTime + 0.18;
+    const dt = BEAT / 2;               // 以八分音符為排程格線
+    while(this.nextTime < ahead){
+      if(this.enabled) this.playStep(this.step, this.nextTime);
+      this.step++;
+      this.nextTime += dt;
+    }
+  }
+
+  playStep(step, t){
+    const s = step % 8;                          // 一小節八個八分音符
+    const bar = Math.floor(step / 8);
+    const musicTime = t - this.t0;
+    const leadIn = musicTime < LEAD_IN - 1e-3;   // 開場數拍：一個小節
+
+    if(leadIn){                                   // 數拍：只有拍點提示
+      if(s % 2 === 0){ this.hat(t, s === 0 ? 0.5 : 0.28); this.click(t, s === 0); }
+      return;
+    }
+
+    // 和聲進行：Am – F – C – G
+    const roots = [110.00, 87.31, 130.81, 98.00];
+    const root = roots[bar % 4];
+    // A 小調五聲音階
+    const scale = [440.00, 523.25, 587.33, 659.25, 783.99];
+    const melody = [
+      [0, null, 2, 3, null, 2, 1, null],
+      [1, null, 0, 1, null, 3, 2, null],
+      [2, null, 3, 4, null, 3, 2, null],
+      [3, null, 2, 1, null, 0, 1, null],
+    ][bar % 4];
+
+    this.hat(t, s === 0 || s === 4 ? 0.34 : 0.16);
+    if(s === 0 || s === 4) this.kick(t, s === 0 ? 1.0 : 0.8);
+    if(s === 3) this.kick(t, 0.35);
+    if(s === 2 || s === 6) this.snare(t);
+    if(s === 0 || s === 3 || s === 4 || s === 6) this.bass(t, root, s === 0 ? 0.5 : 0.34);
+    const mi = melody[s];
+    if(mi !== null && mi !== undefined) this.lead(t, scale[mi], 0.22);
+  }
+
+  /* --- 音色 --- */
+  kick(t, g){
+    const o = this.ctx.createOscillator(), a = this.ctx.createGain();
+    o.type = "sine";
+    o.frequency.setValueAtTime(165, t);
+    o.frequency.exponentialRampToValueAtTime(45, t + 0.12);
+    a.gain.setValueAtTime(g, t);
+    a.gain.exponentialRampToValueAtTime(0.001, t + 0.26);
+    o.connect(a).connect(this.bus); o.start(t); o.stop(t + 0.3);
+  }
+  hat(t, g){
+    const s = this.ctx.createBufferSource(), f = this.ctx.createBiquadFilter(),
+          a = this.ctx.createGain();
+    s.buffer = this.noise;
+    f.type = "highpass"; f.frequency.value = 7200;
+    a.gain.setValueAtTime(g * 0.28, t);
+    a.gain.exponentialRampToValueAtTime(0.001, t + 0.05);
+    s.connect(f).connect(a).connect(this.bus); s.start(t); s.stop(t + 0.07);
+  }
+  snare(t){
+    const s = this.ctx.createBufferSource(), f = this.ctx.createBiquadFilter(),
+          a = this.ctx.createGain();
+    s.buffer = this.noise;
+    f.type = "bandpass"; f.frequency.value = 1900; f.Q.value = 0.8;
+    a.gain.setValueAtTime(0.42, t);
+    a.gain.exponentialRampToValueAtTime(0.001, t + 0.15);
+    s.connect(f).connect(a).connect(this.bus); s.start(t); s.stop(t + 0.18);
+    const o = this.ctx.createOscillator(), b = this.ctx.createGain();
+    o.type = "triangle"; o.frequency.setValueAtTime(190, t);
+    b.gain.setValueAtTime(0.22, t);
+    b.gain.exponentialRampToValueAtTime(0.001, t + 0.09);
+    o.connect(b).connect(this.bus); o.start(t); o.stop(t + 0.11);
+  }
+  click(t, strong){
+    const o = this.ctx.createOscillator(), a = this.ctx.createGain();
+    o.type = "square"; o.frequency.setValueAtTime(strong ? 1400 : 950, t);
+    a.gain.setValueAtTime(strong ? 0.2 : 0.11, t);
+    a.gain.exponentialRampToValueAtTime(0.001, t + 0.05);
+    o.connect(a).connect(this.bus); o.start(t); o.stop(t + 0.06);
+  }
+  bass(t, f0, g){
+    const o = this.ctx.createOscillator(), lp = this.ctx.createBiquadFilter(),
+          a = this.ctx.createGain();
+    o.type = "sawtooth"; o.frequency.setValueAtTime(f0, t);
+    lp.type = "lowpass"; lp.frequency.setValueAtTime(430, t); lp.Q.value = 3;
+    a.gain.setValueAtTime(0.0001, t);
+    a.gain.exponentialRampToValueAtTime(g * 0.5, t + 0.012);
+    a.gain.exponentialRampToValueAtTime(0.001, t + 0.3);
+    o.connect(lp).connect(a).connect(this.bus); o.start(t); o.stop(t + 0.34);
+  }
+  lead(t, f0, g){
+    for(const [type, det, mul] of [["triangle", 0, 1], ["square", 7, 0.3]]){
+      const o = this.ctx.createOscillator(), a = this.ctx.createGain();
+      o.type = type; o.frequency.setValueAtTime(f0, t); o.detune.value = det;
+      a.gain.setValueAtTime(0.0001, t);
+      a.gain.exponentialRampToValueAtTime(g * mul, t + 0.01);
+      a.gain.exponentialRampToValueAtTime(0.001, t + 0.24);
+      o.connect(a).connect(this.bus); o.start(t); o.stop(t + 0.28);
+    }
+  }
+
+  /* --- 判定音效（走 master，永遠聽得到） --- */
+  sfx(kind){
+    if(!this.ctx || !this.enabled) return;
+    const t = this.ctx.currentTime + 0.005;
+    const mk = (type, f0, f1, g, dur) => {
+      const o = this.ctx.createOscillator(), a = this.ctx.createGain();
+      o.type = type; o.frequency.setValueAtTime(f0, t);
+      if(f1 !== f0) o.frequency.exponentialRampToValueAtTime(f1, t + dur);
+      a.gain.setValueAtTime(g, t);
+      a.gain.exponentialRampToValueAtTime(0.001, t + dur);
+      o.connect(a).connect(this.master); o.start(t); o.stop(t + dur + 0.02);
+    };
+    if(kind === "great"){ mk("sine",880,880,0.3,0.3); mk("sine",1320,1320,0.2,0.3); mk("sine",1760,1760,0.13,0.22); }
+    else if(kind === "good"){ mk("sine",660,660,0.24,0.22); }
+    else { mk("sawtooth",150,70,0.2,0.3); }
+  }
+}
+
+/* =====================================================
+   主程式
+   ===================================================== */
+class BreathTaiko{
+  constructor(){
+    this.cv = document.getElementById("game");
+    this.c  = this.cv.getContext("2d");
+    this.setupHiDPI();
+
+    // 連線
+    this.port = null; this.reader = null; this.readAbort = false;
+
+    // 訊號處理
+    this.lastFft = null;
+    this.windowHistory = [false, false, false];
+    this.flowHistory = [];
+    this.serialFlow = 0; this.keyFlow = 0; this.currentFlow = 0;
+    this.lastDataTs = 0; this.detectedMode = null;
+
+    // 遊戲狀態
+    const ch = buildChart();
+    this.notes = ch.notes; this.chartLen = ch.len;
+    this.playing = false; this.paused = false; this.finished = false;
+    this.startTs = null; this.gameTime = -LEAD_IN; this.lastTick = null;
+    this.score = 0; this.combo = 0; this.maxCombo = 0; this.gauge = 30;
+    this.counts = { great: 0, good: 0, miss: 0 };
+    this.effects = []; this.hitFlash = 0;
+    this.records = []; this.judgeLog = [];
+    this.pausedAt = 0;
+
+    this.music = new Music();
+    this.bindUI();
+    this.setStatus(
+      "serial" in navigator
+        ? "按「開始遊戲」用鍵盤或觸控試玩；接了裝置就按「連線裝置」。"
+        : "此瀏覽器不支援 Web Serial（請用桌面版 Chrome 或 Edge）。鍵盤／觸控模式仍可正常使用。"
+    );
+    this.render();
+    requestAnimationFrame(() => this.tick());
+  }
+
+  setupHiDPI(){
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    this.cv.width = CANVAS_W * dpr;
+    this.cv.height = CANVAS_H * dpr;
+    this.c.setTransform(dpr, 0, 0, dpr, 0, 0);
+  }
+  setStatus(s){ document.getElementById("status").textContent = s; }
+
+  /* ---------------- UI ---------------- */
+  bindUI(){
+    const $ = id => document.getElementById(id);
+    this.elPlay = $("btnPlay"); this.elConnect = $("btnConnect");
+    this.elPatient = $("patient"); this.elAssist = $("assist");
+    this.elMusic = $("musicOn"); this.elVol = $("vol"); this.elInfo = $("info");
+    this.elPort = $("portName");
+
+    this.elConnect.onclick = () => this.toggleConnection();
+    this.elPlay.onclick = () => this.togglePlay();
+    $("btnReset").onclick = () => this.resetGame();
+    $("btnCsv").onclick = () => this.saveData();
+    this.elMusic.onchange = () => {
+      this.music.enabled = this.elMusic.checked;
+      if(!this.elMusic.checked) this.music.stopBus();
+      else if(this.playing) this.setStatus("配樂已開啟，請按「重來」讓音樂與畫面對齊。");
+    };
+    this.elVol.oninput = () => this.music.setVolume(this.elVol.value / 100);
+
+    document.addEventListener("keydown", e => {
+      if(e.repeat) return;
+      if(e.code === "ArrowUp"){ this.keyFlow = 80; e.preventDefault(); }
+      else if(e.code === "ArrowDown"){ this.keyFlow = -80; e.preventDefault(); }
+      else if(e.code === "Space"){
+        if(document.activeElement && document.activeElement.tagName === "INPUT") return;
+        this.togglePlay(); e.preventDefault();
+      }
+    });
+    document.addEventListener("keyup", e => {
+      if(e.code === "ArrowUp" || e.code === "ArrowDown") this.keyFlow = 0;
+    });
+
+    const hold = (el, v) => {
+      const on = e => { e.preventDefault(); this.keyFlow = v; };
+      const off = e => { e.preventDefault(); this.keyFlow = 0; };
+      el.addEventListener("pointerdown", on);
+      el.addEventListener("pointerup", off);
+      el.addEventListener("pointerleave", off);
+      el.addEventListener("pointercancel", off);
+    };
+    hold($("btnIn"), 80); hold($("btnOut"), -80);
+  }
+
+  /* ---------------- Web Serial ---------------- */
+  async toggleConnection(){
+    if(this.port) return this.disconnect();
+    if(!("serial" in navigator)){
+      this.setStatus("此瀏覽器不支援 Web Serial。請改用桌面版 Chrome 或 Edge，或用鍵盤／觸控模式。");
+      return;
+    }
+    try{
+      this.port = await navigator.serial.requestPort();
+      await this.port.open({ baudRate: 115200 });
+    }catch(e){
+      this.port = null;
+      this.setStatus("連線取消或失敗：" + e.message);
+      return;
+    }
+    const info = this.port.getInfo ? this.port.getInfo() : {};
+    this.elPort.textContent = info.usbVendorId
+      ? `VID ${info.usbVendorId.toString(16)} / PID ${(info.usbProductId||0).toString(16)}`
+      : "已連線";
+    this.elConnect.textContent = "中斷";
+    this.setStatus("已連線，按「開始遊戲」開始。");
+    this.readAbort = false;
+    this.readLoop();
+  }
+
+  async readLoop(){
+    const dec = new TextDecoderStream();
+    this.port.readable.pipeTo(dec.writable).catch(() => {});
+    this.reader = dec.readable.getReader();
+    let buf = "";
+    try{
+      while(!this.readAbort){
+        const { value, done } = await this.reader.read();
+        if(done) break;
+        buf += value;
+        let i;
+        while((i = buf.indexOf("\n")) >= 0){
+          const line = buf.slice(0, i).replace(/\r$/, "").trim();
+          buf = buf.slice(i + 1);
+          if(line) this.handleLine(line);
+        }
+      }
+    }catch(e){
+      this.setStatus("讀取錯誤：" + e.message);
+    }
+    try{ this.reader.releaseLock(); }catch(e){}
+  }
+
+  async disconnect(){
+    this.readAbort = true;
+    try{ if(this.reader) await this.reader.cancel(); }catch(e){}
+    try{ if(this.port) await this.port.close(); }catch(e){}
+    this.port = null; this.reader = null;
+    this.elConnect.textContent = "連線裝置";
+    this.elPort.textContent = "";
+    this.setStatus("已中斷連線");
+  }
+
+  /* ---------------- 訊號處理 ---------------- */
+  handleLine(line){
+    const fft = parseFftLine(line);
+    if(fft){ this.lastFft = fft; return; }
+    const det = parseDetectLine(line);
+    if(!det) return;
+    let { flowYes, est, lowE } = det;
+
+    // 噪聲過濾
+    let isCandidate = !!(flowYes || (lowE > 800000 && est > 0));
+    if(this.lastFft){
+      if((this.lastFft[1] || 0) > 800000 && (this.lastFft[8] || 0) < 50000) isCandidate = false;
+    }
+
+    // 滑動視窗多數決
+    this.windowHistory.shift();
+    this.windowHistory.push(isCandidate);
+    if(this.windowHistory.filter(Boolean).length >= 2){
+      flowYes = true;
+      if(est === 0 && lowE > 1000000) est = 15;
+    }else{
+      flowYes = false; est = 0;
+    }
+
+    // 吸 / 吐
+    let mode = detectBreathMode(this.lastFft) || this.detectedMode;
+    if(this.elAssist.value === "輔助") mode = this.expectedKindMode() || mode;
+    if(mode) this.detectedMode = mode;
+
+    let signed = Math.abs(est);
+    if(mode === "exhalation"){
+      if(signed === 0 && lowE > 800000) signed = 30;
+      signed = -signed;
+    }
+
+    // 平滑
+    this.flowHistory.push(signed);
+    if(this.flowHistory.length > 4) this.flowHistory.shift();
+    this.serialFlow = this.flowHistory.reduce((a, b) => a + b, 0) / this.flowHistory.length;
+    this.lastDataTs = performance.now() / 1000;
+
+    if(this.playing && !this.paused){
+      const d = new Date();
+      const pad = (n, w = 2) => String(n).padStart(w, "0");
+      this.records.push({
+        timestamp: `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} `
+                 + `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}.`
+                 + pad(d.getMilliseconds(), 3),
+        elapsed: this.gameTime, flow: flowYes,
+        est: this.serialFlow, lowEnergy: lowE, fft: this.lastFft || {},
+      });
+      this.elInfo.textContent = `記錄筆數 ${this.records.length}`;
+    }
+  }
+
+  expectedKindMode(){
+    const n = this.nearestNote();
+    if(!n) return null;
+    return n.kind === "don" ? "inhalation" : "exhalation";
+  }
+  nearestNote(){
+    let best = null, bestD = 1e9;
+    for(const n of this.notes){
+      if(n.judged !== null) continue;
+      const d = (n.t <= this.gameTime && this.gameTime <= n.end) ? 0
+        : Math.min(Math.abs(this.gameTime - n.t), Math.abs(this.gameTime - n.end));
+      if(d < bestD){ best = n; bestD = d; }
+    }
+    return bestD < 2.0 ? best : null;
+  }
+
+  /* ---------------- 遊戲控制 ---------------- */
+  togglePlay(){
+    if(this.playing && !this.paused){
+      this.paused = true;
+      this.pausedAt = this.music.now();
+      this.music.pause();
+      this.elPlay.textContent = "繼續";
+      this.setStatus("已暫停");
+      return;
+    }
+    if(this.finished) this.resetGame();
+
+    if(this.paused){
+      this.paused = false;
+      this.music.resume();
+      this.startTs += this.music.now() - this.pausedAt;
+      this.elPlay.textContent = "暫停";
+      this.setStatus("進行中");
+    }else{
+      this.music.ensure();
+      this.playing = true; this.paused = false;
+      if(this.elMusic.checked){
+        this.music.enabled = true;
+        this.music.setVolume(this.elVol.value / 100);
+        this.music.start();
+        this.startTs = this.music.t0;
+      }else{
+        this.music.enabled = false;
+        this.startTs = this.music.now();
+      }
+      this.gameTime = -LEAD_IN;
+      this.lastTick = this.music.now();
+      this.elPlay.textContent = "暫停";
+      this.setStatus("進行中：跟著長條呼吸，整條維持住");
+    }
+  }
+
+  resetGame(){
+    this.music.stop();
+    const ch = buildChart();
+    this.notes = ch.notes; this.chartLen = ch.len;
+    this.playing = false; this.paused = false; this.finished = false;
+    this.gameTime = -LEAD_IN; this.startTs = null;
+    this.score = 0; this.combo = 0; this.maxCombo = 0; this.gauge = 30;
+    this.counts = { great: 0, good: 0, miss: 0 };
+    this.effects = []; this.hitFlash = 0;
+    this.judgeLog = []; this.records = [];
+    this.flowHistory = []; this.serialFlow = 0;
+    this.elPlay.textContent = "開始遊戲";
+    this.elInfo.textContent = "記錄筆數 0";
+    this.render();
+  }
+
+  /* ---------------- 主迴圈 ---------------- */
+  tick(){
+    const now = this.music.now();
+    const dt = this.lastTick === null ? 0 : Math.min(now - this.lastTick, 0.2);
+    this.lastTick = now;
+
+    if(performance.now() / 1000 - this.lastDataTs > 0.4){
+      this.serialFlow = 0; this.flowHistory = [];
+    }
+    this.currentFlow = Math.abs(this.keyFlow) > 0 ? this.keyFlow : this.serialFlow;
+
+    if(this.playing && !this.paused){
+      this.gameTime = now - this.startTs - LEAD_IN;
+      this.judge(dt);
+      if(this.gameTime > this.chartLen + 1.5){
+        this.playing = false; this.finished = true;
+        this.music.stop();
+        this.elPlay.textContent = "再玩一次";
+        this.setStatus("演奏結束");
+      }
+    }
+
+    this.hitFlash = Math.max(0, this.hitFlash - dt * 4);
+    const wall = performance.now() / 1000;
+    this.effects = this.effects.filter(e => e.until > wall);
+
+    this.render();
+    requestAnimationFrame(() => this.tick());
+  }
+
+  flowOk(n){
+    const f = this.currentFlow;
+    return n.kind === "don" ? f >= TH_NORMAL : f <= -TH_NORMAL;
+  }
+
+  judge(dt){
+    const t = this.gameTime;
+    for(const n of this.notes){
+      if(n.judged !== null) continue;
+      if(n.t - ACC_LEAD <= t && t <= n.end){
+        if(this.flowOk(n)){
+          n.holdHit = Math.min(n.hold, n.holdHit + dt);
+          n.peak = Math.max(n.peak, Math.abs(this.currentFlow));
+          this.hitFlash = 1;
+        }
+      }else if(t > n.end + JUDGE_DELAY){
+        const ratio = n.holdHit / Math.max(n.hold, 0.01);
+        if(ratio >= RATIO_GREAT) this.apply(n, (!n.big || n.peak >= TH_BIG) ? "great" : "good");
+        else if(ratio >= RATIO_GOOD) this.apply(n, "good");
+        else this.apply(n, "miss");
+      }
+    }
+  }
+
+  apply(n, result){
+    n.judged = result;
+    this.counts[result]++;
+    const mult = (n.big ? 1.6 : 1.0) * (1 + n.hold * 0.3);
+    let label, color;
+    if(result === "miss"){
+      this.combo = 0;
+      this.gauge = Math.max(0, this.gauge + GA_MISS);
+      label = "不可"; color = C_MISS;
+    }else{
+      this.combo++;
+      this.maxCombo = Math.max(this.maxCombo, this.combo);
+      const base = result === "great" ? SC_GREAT : SC_GOOD;
+      const bonus = 1 + Math.min(this.combo, 50) * 0.01;
+      this.score += Math.floor(base * mult * bonus);
+      this.gauge = Math.min(100, this.gauge + (result === "great" ? GA_GREAT : GA_GOOD));
+      label = result === "great" ? "良" : "可";
+      color = result === "great" ? C_GREAT : C_GOOD;
+    }
+    if(this.elMusic.checked) this.music.sfx(result);
+    this.effects.push({ until: performance.now()/1000 + 0.7, text: label, color, big: n.big });
+    this.judgeLog.push({
+      time: +n.t.toFixed(2),
+      type: (n.kind === "don" ? "吸氣" : "吐氣") + (n.big ? "・強" : ""),
+      targetFlow: n.flow, holdS: +n.hold.toFixed(2),
+      holdHitS: +n.holdHit.toFixed(2),
+      ratio: +(n.holdHit / Math.max(n.hold, 0.01)).toFixed(2),
+      peak: +n.peak.toFixed(1),
+      result: { great: "良", good: "可", miss: "不可" }[result],
+    });
+  }
+
+  /* ---------------- 繪圖工具 ---------------- */
+  txt(x, y, s, col, size, opts = {}){
+    const c = this.c;
+    c.fillStyle = col;
+    c.font = `${opts.bold ? "bold " : ""}${size}px ${opts.mono ? FONT_NUM : FONT_UI}`;
+    c.textAlign = opts.anchor === "w" ? "left" : opts.anchor === "e" ? "right" : "center";
+    c.textBaseline = "middle";
+    c.fillText(s, x, y);
+  }
+  rect(x0, y0, x1, y1, col){ this.c.fillStyle = col; this.c.fillRect(x0, y0, x1 - x0, y1 - y0); }
+  line(x0, y0, x1, y1, col, w = 1){
+    const c = this.c;
+    c.strokeStyle = col; c.lineWidth = w;
+    c.beginPath(); c.moveTo(x0, y0); c.lineTo(x1, y1); c.stroke();
+  }
+  circle(cx, cy, r, fill, stroke, w){
+    const c = this.c;
+    c.beginPath(); c.arc(cx, cy, r, 0, Math.PI * 2);
+    if(fill){ c.fillStyle = fill; c.fill(); }
+    if(stroke){ c.strokeStyle = stroke; c.lineWidth = w || 1; c.stroke(); }
+  }
+
+  render(){
+    const c = this.c;
+    c.fillStyle = C_BG; c.fillRect(0, 0, CANVAS_W, CANVAS_H);
+    this.drawHeader(); this.drawLane(); this.drawNotes();
+    this.drawBreather(); this.drawMeter(); this.drawEffects();
+    if(this.finished) this.drawResults();
+    else if(!this.playing) this.drawTitle();
+  }
+
+  beatPulse(){
+    if(!this.playing || this.paused) return 0;
+    const phase = ((this.gameTime / BEAT) % 1 + 1) % 1;
+    return Math.exp(-phase * 5);
+  }
+
+  drawHeader(){
+    this.rect(0, 0, CANVAS_W, 86, C_PANEL);
+    this.txt(24, 26, "分數", C_DIM, FS_LABEL, { anchor: "w" });
+    this.txt(24, 58, this.score.toLocaleString(), C_TEXT, FS_BIGNUM, { anchor: "w", bold: 1, mono: 1 });
+    this.txt(210, 26, "連段", C_DIM, FS_LABEL, { anchor: "w" });
+    this.txt(210, 58, String(this.combo), this.combo >= 3 ? C_GOLD : C_TEXT,
+             FS_BIGNUM, { anchor: "w", bold: 1, mono: 1 });
+
+    const p = this.beatPulse(), r = 7 + 5 * p, bx = 320;
+    this.circle(bx, 46, r, p > 0.25 ? C_GOLD : "#3c4463");
+    this.txt(bx, 22, String(BPM), C_DIM, FS_TICK, { mono: 1 });
+
+    const gx0 = 360, gx1 = CANVAS_W - 150, gy = 46;
+    this.txt(gx0, 20, "魂", C_DIM, FS_LABEL, { anchor: "w" });
+    this.rect(gx0, gy - 12, gx1, gy + 12, "#2b3049");
+    const clearX = gx0 + (gx1 - gx0) * GAUGE_CLEAR / 100;
+    const w = (gx1 - gx0) * this.gauge / 100;
+    if(w > 2) this.rect(gx0, gy - 12, gx0 + w, gy + 12, this.gauge >= GAUGE_CLEAR ? C_GOLD : C_DON);
+    this.line(clearX, gy - 17, clearX, gy + 17, C_TEXT, 2);
+    this.txt(clearX, gy + 30, "合格線", C_DIM, FS_TICK);
+    this.txt(gx1 + 14, gy, `${this.gauge.toFixed(0)}%`, C_TEXT, FS_LABEL + 4, { anchor: "w", bold: 1, mono: 1 });
+  }
+
+  drawLane(){
+    const top = LANE_Y - LANE_H / 2, bot = LANE_Y + LANE_H / 2;
+    this.rect(0, top, CANVAS_W, bot, C_LANE);
+    this.rect(0, top, JUDGE_X, bot, C_LANE_HI);
+
+    const tL = this.gameTime - JUDGE_X / SCROLL_SPEED;
+    const tR = this.gameTime + (CANVAS_W - JUDGE_X) / SCROLL_SPEED;
+    for(let k = Math.floor(tL / BEAT) - 1; k <= Math.ceil(tR / BEAT) + 1; k++){
+      const x = JUDGE_X + (k * BEAT - this.gameTime) * SCROLL_SPEED;
+      if(x < -5 || x > CANVAS_W + 5) continue;
+      const isBar = ((k % 4) + 4) % 4 === 0;
+      this.line(x, top, x, bot, isBar ? C_BAR : C_BEAT, isBar ? 2 : 1);
+    }
+    this.line(0, top, CANVAS_W, top, C_LANE === C_LANE ? "#39405f" : "#39405f");
+    this.line(0, bot, CANVAS_W, bot, "#39405f");
+
+    if(this.hitFlash > 0) this.rect(JUDGE_X - 5, top, JUDGE_X + 5, bot, C_GOLD);
+    this.line(JUDGE_X, top - 8, JUDGE_X, bot + 8, C_TEXT, 3);
+    const c = this.c;
+    c.fillStyle = C_TEXT; c.beginPath();
+    c.moveTo(JUDGE_X, top - 8); c.lineTo(JUDGE_X - 9, top - 22);
+    c.lineTo(JUDGE_X + 9, top - 22); c.closePath(); c.fill();
+  }
+
+  drawNotes(){
+    const c = this.c, t = this.gameTime;
+    const sorted = this.notes.slice().sort((a, b) => b.t - a.t);
+    for(const n of sorted){
+      const x0 = JUDGE_X + (n.t - t) * SCROLL_SPEED;
+      const x1 = JUDGE_X + (n.end - t) * SCROLL_SPEED;
+      if(x1 < -200 || x0 > CANVAS_W + 200) continue;
+
+      let base, light, edge;
+      if(n.judged === "miss"){ base = "#4a4f68"; light = "#5c6280"; edge = "#6d7590"; }
+      else if(n.kind === "don"){ base = C_DON; light = C_DON_LT; edge = C_GOLD; }
+      else { base = C_KA; light = C_KA_LT; edge = C_GOLD; }
+
+      const h = n.big ? 34 : 26;
+      const fs = n.big ? FS_NOTE_BG : FS_NOTE;
+
+      this.rect(x0, LANE_Y - h, x1, LANE_Y + h, base);
+      if(n.holdHit > 0){
+        const fx = x0 + (n.holdHit / n.hold) * (x1 - x0);
+        this.rect(x0, LANE_Y - h, fx, LANE_Y + h, C_GOLD);
+      }
+      this.circle(x0, LANE_Y, h, base);
+      this.circle(x1, LANE_Y, h, light);
+
+      c.strokeStyle = edge; c.lineWidth = 3;
+      c.beginPath(); c.moveTo(x0, LANE_Y - h); c.lineTo(x1, LANE_Y - h); c.stroke();
+      c.beginPath(); c.moveTo(x0, LANE_Y + h); c.lineTo(x1, LANE_Y + h); c.stroke();
+      c.beginPath(); c.arc(x0, LANE_Y, h, Math.PI / 2, Math.PI * 1.5); c.stroke();
+      c.beginPath(); c.arc(x1, LANE_Y, h, -Math.PI / 2, Math.PI / 2); c.stroke();
+
+      const cx = (x0 + x1) / 2;
+      this.txt(cx, LANE_Y, n.kind === "don" ? "吸 氣" : "吐 氣", "#1b1f2e", fs, { bold: 1 });
+      this.txt(cx, LANE_Y - h - 20, `${n.flow} L/min ・ ${n.hold} 秒`, C_DIM, FS_META);
+    }
+  }
+
+  drawBreather(){
+    const cx = 105, cy = LANE_Y, f = this.currentFlow;
+    const mag = Math.min(Math.abs(f) / 120, 1);
+    const r = 40 + 18 * mag + 4 * this.beatPulse();
+    let body, ring;
+    if(f > TH_NORMAL * 0.5){ body = C_DON; ring = C_DON_LT; }
+    else if(f < -TH_NORMAL * 0.5){ body = C_KA; ring = C_KA_LT; }
+    else { body = "#39405f"; ring = "#4a5273"; }
+    this.circle(cx, cy, r + 7, null, ring, 3);
+    this.circle(cx, cy, r, body);
+    const eye = 6 + 3 * mag;
+    const c = this.c;
+    c.fillStyle = "#151827";
+    for(const dx of [-17, 17]){
+      c.beginPath(); c.ellipse(cx + dx, cy - 12 + eye / 2, eye / 2, eye / 2, 0, 0, Math.PI * 2); c.fill();
+    }
+    const mw = 10 + 20 * mag;
+    c.beginPath();
+    c.ellipse(cx, cy + 8 + mw * 0.4, mw / 2, mw * 0.4, 0, 0, Math.PI * 2);
+    c.fill();
+  }
+
+  drawMeter(){
+    const x0 = JUDGE_X, x1 = CANVAS_W - 200, y = 355, h = 30;
+    this.txt(x0, y - 24, "即時流速", C_DIM, FS_LABEL, { anchor: "w" });
+    this.rect(x0, y, x1, y + h, "#20243a");
+
+    const f = this.currentFlow, frac = Math.min(Math.abs(f) / 150, 1);
+    if(Math.abs(f) > 1) this.rect(x0, y, x0 + (x1 - x0) * frac, y + h, f > 0 ? C_DON : C_KA);
+
+    for(const tick of [30, 60, 90, 120]){
+      const tx = x0 + (x1 - x0) * tick / 150;
+      this.line(tx, y, tx, y + h, "#454c6b");
+      this.txt(tx, y + h + 15, String(tick), C_DIM, FS_TICK, { mono: 1 });
+    }
+
+    const n = this.nearestNote();
+    if(n){
+      const tx = x0 + (x1 - x0) * Math.min(n.flow / 150, 1);
+      const c = this.c;
+      c.fillStyle = C_GOLD; c.beginPath();
+      c.moveTo(tx, y - 5); c.lineTo(tx - 9, y - 18); c.lineTo(tx + 9, y - 18);
+      c.closePath(); c.fill();
+    }
+
+    let label = "—";
+    if(f > 1) label = `吸氣 ${Math.abs(f).toFixed(0)}`;
+    else if(f < -1) label = `吐氣 ${Math.abs(f).toFixed(0)}`;
+    this.txt(x1 + 14, y + h / 2, label, C_TEXT, FS_LABEL + 5, { anchor: "w", bold: 1 });
+
+    if(this.chartLen > 0){
+      const p = Math.max(0, Math.min(this.gameTime / this.chartLen, 1));
+      const py = y + 76;
+      this.rect(x0, py, x1, py + 7, "#20243a");
+      this.rect(x0, py, x0 + (x1 - x0) * p, py + 7, C_JUDGE);
+      const barNo = Math.max(0, Math.floor(this.gameTime / BAR) + 1);
+      this.txt(x0, py - 16,
+        `進度 ${Math.max(this.gameTime, 0).toFixed(0)} / ${this.chartLen.toFixed(0)} 秒`
+        + `　第 ${barNo} / ${Math.floor(this.chartLen / BAR)} 小節`,
+        C_DIM, FS_LABEL, { anchor: "w" });
+    }
+  }
+
+  drawEffects(){
+    const now = performance.now() / 1000;
+    for(const e of this.effects){
+      const age = 0.7 - (e.until - now);
+      this.txt(JUDGE_X, LANE_Y - 100 - age * 50, e.text, e.color,
+               FS_JUDGE + (e.big ? 8 : 0), { bold: 1 });
+    }
+  }
+
+  drawTitle(){
+    if(this.paused){
+      this.txt(CANVAS_W / 2, LANE_Y, "暫停中", C_TEXT, FS_TITLE, { bold: 1 });
+      return;
+    }
+    if(this.gameTime > -LEAD_IN) return;
+    this.txt(CANVAS_W / 2, LANE_Y - 12, "呼吸太鼓達人", C_TEXT, FS_TITLE, { bold: 1 });
+    this.txt(CANVAS_W / 2, LANE_Y + 34, "紅條吸氣　藍條吐氣　整條維持住才算「良」",
+             C_DIM, FS_LABEL + 2);
+  }
+
+  drawResults(){
+    const c = this.c;
+    c.fillStyle = "rgba(13,16,32,0.74)"; c.fillRect(0, 0, CANVAS_W, CANVAS_H);
+    const bw = 540, bh = 340;
+    const x0 = (CANVAS_W - bw) / 2, y0 = (CANVAS_H - bh) / 2;
+    this.rect(x0, y0, x0 + bw, y0 + bh, C_PANEL);
+
+    const passed = this.gauge >= GAUGE_CLEAR;
+    this.txt(CANVAS_W / 2, y0 + 46, passed ? "合格" : "再挑戰一次",
+             passed ? C_GOLD : C_DON, FS_RESULT, { bold: 1 });
+
+    const rows = [
+      ["分數", this.score.toLocaleString()],
+      ["良", String(this.counts.great)],
+      ["可", String(this.counts.good)],
+      ["不可", String(this.counts.miss)],
+      ["最高連段", String(this.maxCombo)],
+      ["魂條", `${this.gauge.toFixed(0)}%`],
+    ];
+    let y = y0 + 100;
+    for(const [k, v] of rows){
+      this.txt(x0 + 70, y, k, C_DIM, FS_LABEL + 2, { anchor: "w" });
+      this.txt(x0 + bw - 70, y, v, C_TEXT, FS_LABEL + 5, { anchor: "e", bold: 1, mono: 1 });
+      y += 34;
+    }
+    this.txt(CANVAS_W / 2, y0 + bh - 24, "按「再玩一次」或空白鍵重新開始", C_DIM, FS_TICK);
+  }
+
+  /* ---------------- 匯出 CSV ---------------- */
+  saveData(){
+    if(!this.records.length && !this.judgeLog.length){
+      this.setStatus("還沒有可儲存的資料，請先玩一輪。");
+      return;
+    }
+    const patient = this.elPatient.value.trim();
+    const q = v => {
+      const s = String(v ?? "");
+      return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+    };
+    const rows = [];
+    rows.push(["# 成績"]);
+    rows.push(["病歷編號", patient]);
+    rows.push(["分數", this.score]);
+    rows.push(["良", this.counts.great]);
+    rows.push(["可", this.counts.good]);
+    rows.push(["不可", this.counts.miss]);
+    rows.push(["最高連段", this.maxCombo]);
+    rows.push(["魂條(%)", this.gauge.toFixed(1)]);
+    rows.push(["BPM", BPM]);
+    rows.push([]);
+    rows.push(["# 逐長條判定"]);
+    rows.push(["起始時間(s)", "類型", "目標流速(L/min)", "長度(s)",
+               "達標秒數(s)", "達標比例", "尖峰流速(L/min)", "判定"]);
+    for(const j of this.judgeLog)
+      rows.push([j.time, j.type, j.targetFlow, j.holdS, j.holdHitS, j.ratio, j.peak, j.result]);
+    rows.push([]);
+    rows.push(["# 原始訊號"]);
+    const bands = Array.from({ length: 20 }, (_, i) => `${i + 1}kHz`);
+    rows.push(["病歷編號", "時間戳", "遊戲時間(s)", "flow", "est_flow_Lpm", "low_energy", ...bands]);
+    for(const r of this.records){
+      const fft = r.fft || {};
+      rows.push([patient, r.timestamp, r.elapsed.toFixed(2), r.flow ? "YES" : "no",
+                 r.est.toFixed(1), r.lowEnergy,
+                 ...Array.from({ length: 20 }, (_, i) => fft[i + 1] ?? "")]);
+    }
+
+    const csv = rows.map(r => r.map(q).join(",")).join("\r\n");
+    const blob = new Blob(["\ufeff" + csv], { type: "text/csv;charset=utf-8" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = (patient ? `breath_taiko_${patient}` : "breath_taiko") + ".csv";
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    this.setStatus(`已匯出 ${a.download}`);
+  }
+}
+
+window.addEventListener("DOMContentLoaded", () => { new BreathTaiko(); });
+</script>
+</body>
+</html>
