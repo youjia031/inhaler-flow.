@@ -81,6 +81,28 @@
 <script>
 "use strict";
 
+// ============================================================
+//  Log 功能（跟前面四個網站完全一樣的寫法）
+// ============================================================
+async function sendLog(action, data = {}) {
+    try {
+        const response = await fetch('/api/log', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                action: action,
+                data: data,
+                url: window.location.href,
+                timestamp: new Date().toISOString()
+            })
+        });
+        const result = await response.json();
+        console.log('✅ Log 已發送:', action, result);
+    } catch (e) {
+        console.log('⚠️ Log 發送失敗（不影響主功能）:', e.message);
+    }
+}
+
 /* =====================================================
    課表 / 譜面來源   (mode, flow_Lpm, duration_sec)
    長度保持 0.5 秒的倍數，才會落在拍點上
@@ -399,6 +421,8 @@ class BreathTaiko{
     );
     this.render();
     requestAnimationFrame(() => this.tick());
+
+    sendLog('頁面載入', { version: '1.0', type: '呼吸太鼓達人' });
   }
 
   setupHiDPI(){
@@ -462,9 +486,11 @@ class BreathTaiko{
     try{
       this.port = await navigator.serial.requestPort();
       await this.port.open({ baudRate: 115200 });
+      sendLog('連線成功');
     }catch(e){
       this.port = null;
       this.setStatus("連線取消或失敗：" + e.message);
+      sendLog('連線失敗', { error: e.message });
       return;
     }
     const info = this.port.getInfo ? this.port.getInfo() : {};
@@ -508,6 +534,7 @@ class BreathTaiko{
     this.elConnect.textContent = "連線裝置";
     this.elPort.textContent = "";
     this.setStatus("已中斷連線");
+    sendLog('斷開連線');
   }
 
   /* ---------------- 訊號處理 ---------------- */
@@ -589,6 +616,7 @@ class BreathTaiko{
       this.music.pause();
       this.elPlay.textContent = "繼續";
       this.setStatus("已暫停");
+      sendLog('遊戲暫停');
       return;
     }
     if(this.finished) this.resetGame();
@@ -599,6 +627,7 @@ class BreathTaiko{
       this.startTs += this.music.now() - this.pausedAt;
       this.elPlay.textContent = "暫停";
       this.setStatus("進行中");
+      sendLog('遊戲繼續');
     }else{
       this.music.ensure();
       this.playing = true; this.paused = false;
@@ -615,6 +644,7 @@ class BreathTaiko{
       this.lastTick = this.music.now();
       this.elPlay.textContent = "暫停";
       this.setStatus("進行中：跟著長條呼吸，整條維持住");
+      sendLog('遊戲開始');
     }
   }
 
@@ -632,6 +662,7 @@ class BreathTaiko{
     this.elPlay.textContent = "開始遊戲";
     this.elInfo.textContent = "記錄筆數 0";
     this.render();
+    sendLog('遊戲重置');
   }
 
   /* ---------------- 主迴圈 ---------------- */
@@ -653,6 +684,7 @@ class BreathTaiko{
         this.music.stop();
         this.elPlay.textContent = "再玩一次";
         this.setStatus("演奏結束");
+        sendLog('遊戲結束', { score: this.score, great: this.counts.great, good: this.counts.good, miss: this.counts.miss });
       }
     }
 
@@ -697,6 +729,7 @@ class BreathTaiko{
       this.combo = 0;
       this.gauge = Math.max(0, this.gauge + GA_MISS);
       label = "不可"; color = C_MISS;
+      sendLog('判定: 不可');
     }else{
       this.combo++;
       this.maxCombo = Math.max(this.maxCombo, this.combo);
@@ -706,6 +739,7 @@ class BreathTaiko{
       this.gauge = Math.min(100, this.gauge + (result === "great" ? GA_GREAT : GA_GOOD));
       label = result === "great" ? "良" : "可";
       color = result === "great" ? C_GREAT : C_GOOD;
+      sendLog('判定: ' + label, { combo: this.combo, score: this.score });
     }
     if(this.elMusic.checked) this.music.sfx(result);
     this.effects.push({ until: performance.now()/1000 + 0.7, text: label, color, big: n.big });
@@ -997,6 +1031,7 @@ class BreathTaiko{
     a.click();
     setTimeout(() => URL.revokeObjectURL(a.href), 1000);
     this.setStatus(`已匯出 ${a.download}`);
+    sendLog('匯出 CSV', { patient, records: this.records.length });
   }
 }
 
